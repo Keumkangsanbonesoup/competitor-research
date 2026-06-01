@@ -91,19 +91,47 @@ class BaseCrawler(ABC):
 
     def _download_banner(self, page: Page, promo_idx: int) -> str | None:
         """메인 배너(KV) 이미지 1장만 다운로드.
-        와이드형(가로:세로 ≥ 1.8, 가로 ≥ 400px) 이미지 중 가장 큰 것을 배너로 판단."""
+        - getBoundingClientRect()로 실제 렌더링 크기 기준 (naturalWidth=0인 lazy load 대응)
+        - <img> 태그 우선, 없으면 CSS background-image 폴백
+        - 와이드형(가로:세로 ≥ 1.5, 가로 ≥ 300px) 중 면적이 가장 큰 것을 배너로 판단"""
+        # 맨 위로 올려서 배너 영역 lazy load 트리거
+        page.evaluate("window.scrollTo(0, 0)")
+        page.wait_for_timeout(500)
+
         banner_url = page.evaluate("""
             () => {
-                let best = null, bestW = 0;
+                let best = null, bestArea = 0;
+
+                // 1) <img> 태그 — getBoundingClientRect 기준 (lazy load 대응)
                 document.querySelectorAll('img').forEach(img => {
-                    const w = img.naturalWidth  || img.width  || 0;
-                    const h = img.naturalHeight || img.height || 1;
-                    if (w < 400) return;        // 너무 작은 이미지 제외
-                    if (w / h < 1.8) return;    // 세로형(상품 썸네일 등) 제외
+                    const rect = img.getBoundingClientRect();
+                    const w = rect.width  || img.naturalWidth  || img.width  || 0;
+                    const h = rect.height || img.naturalHeight || img.height || 1;
+                    if (w < 300) return;
+                    if (w / h < 1.5) return;   // 세로형 상품 이미지 제외
                     const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
                     if (!src || src.startsWith('data:')) return;
-                    if (w > bestW) { bestW = w; best = src; }
+                    const area = w * h;
+                    if (area > bestArea) { bestArea = area; best = src; }
                 });
+
+                // 2) CSS background-image 폴백 (<img>로 못 찾은 경우)
+                if (!best) {
+                    const sel = [
+                        '[class*="banner"]','[class*="kv"]','[class*="hero"]',
+                        '[class*="visual"]','[class*="main-img"]','[class*="top-img"]'
+                    ].join(',');
+                    document.querySelectorAll(sel).forEach(el => {
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width < 300 || rect.width / (rect.height || 1) < 1.5) return;
+                        const bg = window.getComputedStyle(el).backgroundImage;
+                        const m = bg && bg.match(/url\\(["']?([^"')]+)["']?\\)/);
+                        if (m && m[1] && !m[1].startsWith('data:')) {
+                            const area = rect.width * rect.height;
+                            if (area > bestArea) { bestArea = area; best = m[1]; }
+                        }
+                    });
+                }
                 return best;
             }
         """)
