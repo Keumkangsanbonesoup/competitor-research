@@ -4,10 +4,6 @@ from base import BaseCrawler
 
 
 class NaverKurlyCrawler(BaseCrawler):
-    """
-    네이버 컬리N마트 크롤러.
-    홈 → 프로모션/기획전 배너 링크 → 상세 수집.
-    """
     LISTING_URL = "https://shopping.naver.com/kurlynmart/home"
 
     def __init__(self):
@@ -15,48 +11,49 @@ class NaverKurlyCrawler(BaseCrawler):
 
     def get_promo_urls(self, page: Page) -> list:
         page.goto(self.listing_url, wait_until="domcontentloaded", timeout=30000)
-        # 네이버는 JS 초기화 느림
         page.wait_for_timeout(5000)
-        # 스크롤로 더 많은 콘텐츠 로드
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.5)")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.4)")
         page.wait_for_timeout(1500)
 
-        promos = page.evaluate("""
-            () => {
+        # 네비게이션 탭 제외 키워드
+        NAV_SKIP = ['베스트','신상품','알뜰쇼핑','카테고리','컬리N마트','선택됨',
+                    '홈','검색','장바구니','마이','로그인']
+
+        # 기획전/이벤트 URL 패턴 우선
+        promos = page.evaluate(f"""
+            () => {{
+                const skip = {NAV_SKIP};
                 const seen = new Set();
                 const results = [];
-                // 네이버쇼핑 내 컬리N마트 기획전/이벤트 링크
-                const selectors = [
-                    'a[href*="kurlynmart/exhibition"]',
-                    'a[href*="kurlynmart/event"]',
-                    'a[href*="kurlynmart/promotion"]',
-                    'a[href*="/kurlynmart/"]',
-                ];
-                selectors.forEach(sel => {
-                    document.querySelectorAll(sel).forEach(a => {
+                const isNav = t => skip.some(w => t.includes(w));
+
+                // 기획전/이벤트 링크 먼저
+                document.querySelectorAll('a[href]').forEach(a => {{
+                    const href = a.href;
+                    const isPromo = href.includes('exhibition') || href.includes('event')
+                        || href.includes('promotion') || href.includes('planshop');
+                    if (!isPromo || seen.has(href)) return;
+                    const img = a.querySelector('img');
+                    const text = (img?.alt || a.innerText || '').trim();
+                    if (!text || isNav(text) || text.length < 4) return;
+                    seen.add(href);
+                    results.push({{ title: text.slice(0, 60), url: href }});
+                }});
+
+                // fallback: 배너 이미지 있는 링크 (네비게이션 제외)
+                if (results.length === 0) {{
+                    document.querySelectorAll('a[href]').forEach(a => {{
                         if (seen.has(a.href)) return;
                         const img = a.querySelector('img');
-                        const title = (img?.alt || a.innerText || '').trim();
-                        if (!title || !a.href) return;
+                        if (!img || img.naturalWidth < 200) return;
+                        const text = (img.alt || a.innerText || '').trim();
+                        if (!text || isNav(text) || text.length < 4) return;
                         seen.add(a.href);
-                        results.push({ title: title.slice(0, 60), url: a.href });
-                    });
-                });
-
-                // fallback: 큰 이미지를 가진 배너 링크
-                if (results.length === 0) {
-                    document.querySelectorAll('a[href]').forEach(a => {
-                        if (seen.has(a.href) || !a.href.includes('naver')) return;
-                        const img = a.querySelector('img');
-                        if (!img || img.naturalWidth < 250) return;
-                        const title = (img.alt || a.innerText || '네이버 컬리N마트 프로모션').trim();
-                        seen.add(a.href);
-                        results.push({ title: title.slice(0, 60), url: a.href });
-                    });
-                }
-
+                        results.push({{ title: text.slice(0, 60), url: a.href }});
+                    }});
+                }}
                 return results.slice(0, 8);
-            }
+            }}
         """)
 
         return promos
