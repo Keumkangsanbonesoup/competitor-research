@@ -1,0 +1,10 @@
+# 수집된 스크린샷·이미지는 Git에 올리지 않음 (GitLab Artifacts로 보관)
+data/*/
+
+# 환경변수 파일
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,32 @@
+stages:
+  - crawl
+
+weekly-competitor-crawl:
+  stage: crawl
+  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+  script:
+    # 크롤링 실행
+    - pip install -r requirements.txt
+    - python crawler/main.py
+
+    # 결과 JSON만 Git에 자동 커밋·푸시
+    - git config user.email "gitlab-ci@baemin.com"
+    - git config user.name "GitLab CI"
+    - git add data/*.json
+    - |
+      if git diff --cached --quiet; then
+        echo "변경된 데이터 없음, 커밋 생략"
+      else
+        git commit -m "chore: weekly competitor data $(date +%Y-%m-%d)"
+        git push "https://oauth2:${CI_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" HEAD:${CI_COMMIT_BRANCH}
+      fi
+  artifacts:
+    # 스크린샷은 Artifacts로만 보관 (Git에는 올리지 않음)
+    name: "screenshots-$CI_PIPELINE_CREATED_AT"
+    paths:
+      - data/*/
+    expire_in: 8 weeks
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
