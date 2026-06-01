@@ -37,8 +37,16 @@ class BaseCrawler(ABC):
             images   = self._large_images(page)
             text     = self._visible_text(page)
 
+            # 페이지에서 실제 제목 추출 (슬러그보다 정확한 한국어 제목)
+            page_title = page.evaluate("""
+                () => {
+                    const h = document.querySelector('h1, h2, [class*="title"], [class*="tit"]');
+                    return (h?.innerText || document.title || '').trim().split('\\n')[0].slice(0, 80);
+                }
+            """)
+
             return {
-                "title": title,
+                "title": page_title or title,
                 "url": url,
                 "kv_screenshot": kv_shot,
                 "full_screenshot": full_shot,

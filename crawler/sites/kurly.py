@@ -2,12 +2,14 @@ from playwright.sync_api import Page
 
 from base import BaseCrawler
 
+CURRENT_YEARS = ("2026", "2027")
+
 
 class KurlyCrawler(BaseCrawler):
     """
     마켓컬리 크롤러.
-    컬리는 현재 event.kurly.com/lego/event/ 패턴 사용.
-    메인 페이지에서 해당 링크를 추출.
+    메인 페이지에서 event.kurly.com/lego/event/ 링크 추출.
+    이미지 alt가 전부 '메인배너'이므로 URL 슬러그를 임시 제목으로 사용.
     """
     LISTING_URL = "https://www.kurly.com/"
 
@@ -17,79 +19,31 @@ class KurlyCrawler(BaseCrawler):
     def get_promo_urls(self, page: Page) -> list:
         page.goto(self.listing_url, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
-        # 스크롤해서 이벤트 섹션 로드
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.3)")
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight * 0.4)")
         page.wait_for_timeout(1000)
 
-        # event.kurly.com 링크 우선 추출
-        promos = page.evaluate("""
-            () => {
+        promos = page.evaluate(f"""
+            () => {{
                 const seen = new Set();
                 const results = [];
-                document.querySelectorAll('a[href]').forEach(a => {
+                const current = {list(CURRENT_YEARS)};
+                document.querySelectorAll('a[href*="event.kurly.com/lego/event/"]').forEach(a => {{
                     const href = a.href;
-                    if (!href.includes('event.kurly.com') || seen.has(href)) return;
+                    if (seen.has(href)) return;
+                    // 현재 연도 이벤트만 필터
+                    if (!current.some(y => href.includes('/' + y + '/'))) return;
+                    // URL 마지막 슬러그를 임시 제목으로
+                    const parts = href.replace(/\\/$/, '').split('/');
+                    const slug = parts[parts.length - 1] || parts[parts.length - 2];
+                    // alt에서 '메인배너' 제거 후 실제 설명이 있으면 우선 사용
                     const img = a.querySelector('img');
-                    const titleEl = a.closest('li, article, div[class*="item"], div[class*="card"]')
-                        ?.querySelector('[class*="tit"], [class*="title"], [class*="name"], p, span');
-                    const title = (titleEl?.innerText || img?.alt || a.innerText || '').trim();
-                    if (!title || title.length < 2) return;
+                    const alt = (img?.alt || '').replace(/^메인배너[_\\s]*/i, '').trim();
+                    const title = alt || slug;
                     seen.add(href);
-                    results.push({ title: title.slice(0, 60), url: href });
-                });
+                    results.push({{ title: title.slice(0, 60), url: href }});
+                }});
                 return results.slice(0, 8);
-            }
+            }}
         """)
-
-        # fallback 1: kurly.com/np/categories 또는 이벤트 관련 링크
-        if not promos:
-            promos = page.evaluate("""
-                () => {
-                    const seen = new Set();
-                    const results = [];
-                    const skip = ['로그인','회원가입','장바구니','마이컬리','고객센터',
-                                  '카테고리','베스트','신상품','알뜰쇼핑'];
-                    document.querySelectorAll('a[href]').forEach(a => {
-                        const href = a.href;
-                        if (!href.includes('kurly.com') || seen.has(href)) return;
-                        const img = a.querySelector('img');
-                        if (!img || img.naturalWidth < 200) return;
-                        const title = (img.alt || a.innerText || '').trim();
-                        const isSkip = skip.some(w => title.includes(w));
-                        if (!title || isSkip || title.length < 2) return;
-                        seen.add(href);
-                        results.push({ title: title.slice(0, 60), url: href });
-                    });
-                    return results.slice(0, 8);
-                }
-            """)
-
-        # fallback 2: 이벤트 목록 직접 접근
-        if not promos:
-            for url in [
-                "https://www.kurly.com/shop/event/eventList.php",
-                "https://m.kurly.com/event",
-            ]:
-                page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(2000)
-                promos = page.evaluate("""
-                    () => {
-                        const seen = new Set();
-                        const results = [];
-                        document.querySelectorAll('a[href]').forEach(a => {
-                            const href = a.href;
-                            const isEvent = href.includes('event.kurly') || href.includes('eventView') || href.includes('bn_id');
-                            if (!isEvent || seen.has(href)) return;
-                            const img = a.querySelector('img');
-                            const title = (img?.alt || a.innerText || '').trim();
-                            if (!title || title.length < 2) return;
-                            seen.add(href);
-                            results.push({ title: title.slice(0, 60), url: href });
-                        });
-                        return results.slice(0, 8);
-                    }
-                """)
-                if promos:
-                    break
 
         return promos
