@@ -46,7 +46,8 @@ class BaseCrawler(ABC):
             """)
 
             return {
-                "title": page_title or title,
+                "title": title or page_title,   # 목록에서 가져온 제목 우선
+                "page_title": page_title,        # 페이지 자체 제목은 별도 보관
                 "url": url,
                 "kv_screenshot": kv_shot,
                 "full_screenshot": full_shot,
