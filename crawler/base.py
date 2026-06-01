@@ -32,12 +32,11 @@ class BaseCrawler(ABC):
             page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
             page.wait_for_timeout(1000)
 
-            kv_shot  = self._screenshot(page, f"promo_{idx:02d}_kv",  full_page=False)
+            kv_shot   = self._screenshot(page, f"promo_{idx:02d}_kv",   full_page=False)
             full_shot = self._screenshot(page, f"promo_{idx:02d}_full", full_page=True)
-            image_urls = self._large_images(page)
-            # 실제 파일로 다운로드 (URL은 경쟁사가 배너 내리면 만료되므로)
-            downloaded = self._download_images(page, image_urls, idx)
-            text       = self._visible_text(page)
+            # 배너 이미지 1장만 다운로드 (와이드 KV 배너)
+            banner    = self._download_banner(page, idx)
+            text      = self._visible_text(page)
 
             # 페이지에서 실제 제목 추출 (슬러그보다 정확한 한국어 제목)
             page_title = page.evaluate("""
@@ -48,13 +47,12 @@ class BaseCrawler(ABC):
             """)
 
             return {
-                "title": title or page_title,    # 목록에서 가져온 제목 우선
-                "page_title": page_title,         # 페이지 자체 제목은 별도 보관
+                "title": title or page_title,  # 목록에서 가져온 제목 우선
+                "page_title": page_title,       # 페이지 자체 제목은 별도 보관
                 "url": url,
                 "kv_screenshot": kv_shot,
                 "full_screenshot": full_shot,
-                "page_images": image_urls[:20],   # 원본 URL (참조용)
-                "downloaded_images": downloaded,  # 로컬 저장 파일 경로 (영구 보관)
+                "banner_image": banner,         # 메인 배너 1장 (영구 보관용 로컬 파일)
                 "page_text": text,
             }
         except Exception as e:
@@ -91,26 +89,41 @@ class BaseCrawler(ABC):
         page.screenshot(path=str(path), full_page=full_page)
         return str(path)
 
-    def _download_images(self, page: Page, urls: list, promo_idx: int, max_imgs: int = 20) -> list:
-        """이미지 URL을 실제 파일로 다운로드. Playwright request 사용 (쿠키·Referer 자동 포함)."""
-        saved = []
-        for i, url in enumerate(urls[:max_imgs]):
-            try:
-                response = page.request.get(url, timeout=10000)
-                if not response.ok:
-                    continue
-                # 확장자 추출 (쿼리스트링 제거 후)
-                clean_url = url.split("?")[0]
-                ext = clean_url.rsplit(".", 1)[-1].lower()
-                if ext not in ("jpg", "jpeg", "png", "gif", "webp", "avif"):
-                    ext = "jpg"
-                path = self.img_dir / f"promo_{promo_idx:02d}_img_{i+1:02d}.{ext}"
-                path.write_bytes(response.body())
-                saved.append(str(path))
-            except Exception as e:
-                print(f"    이미지 다운로드 실패 [{i+1}] {url[:60]}: {e}")
-        print(f"    배너 이미지 {len(saved)}/{len(urls[:max_imgs])}개 저장 완료")
-        return saved
+    def _download_banner(self, page: Page, promo_idx: int) -> str | None:
+        """메인 배너(KV) 이미지 1장만 다운로드.
+        와이드형(가로:세로 ≥ 1.8, 가로 ≥ 400px) 이미지 중 가장 큰 것을 배너로 판단."""
+        banner_url = page.evaluate("""
+            () => {
+                let best = null, bestW = 0;
+                document.querySelectorAll('img').forEach(img => {
+                    const w = img.naturalWidth  || img.width  || 0;
+                    const h = img.naturalHeight || img.height || 1;
+                    if (w < 400) return;        // 너무 작은 이미지 제외
+                    if (w / h < 1.8) return;    // 세로형(상품 썸네일 등) 제외
+                    const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+                    if (!src || src.startsWith('data:')) return;
+                    if (w > bestW) { bestW = w; best = src; }
+                });
+                return best;
+            }
+        """)
+        if not banner_url:
+            print(f"    배너 이미지를 찾지 못했어요 (promo_{promo_idx:02d})")
+            return None
+        try:
+            response = page.request.get(banner_url, timeout=10000)
+            if not response.ok:
+                return None
+            ext = banner_url.split("?")[0].rsplit(".", 1)[-1].lower()
+            if ext not in ("jpg", "jpeg", "png", "gif", "webp", "avif"):
+                ext = "jpg"
+            path = self.img_dir / f"promo_{promo_idx:02d}_banner.{ext}"
+            path.write_bytes(response.body())
+            print(f"    배너 이미지 저장: {path.name}")
+            return str(path)
+        except Exception as e:
+            print(f"    배너 이미지 다운로드 실패: {e}")
+            return None
 
     def _large_images(self, page: Page, min_width: int = 200) -> list:
         """배너·KV·섹션 이미지 수집. lazy load 대응 + <picture> + srcset 포함."""
