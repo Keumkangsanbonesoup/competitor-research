@@ -34,8 +34,10 @@ class BaseCrawler(ABC):
 
             kv_shot  = self._screenshot(page, f"promo_{idx:02d}_kv",  full_page=False)
             full_shot = self._screenshot(page, f"promo_{idx:02d}_full", full_page=True)
-            images   = self._large_images(page)
-            text     = self._visible_text(page)
+            image_urls = self._large_images(page)
+            # 실제 파일로 다운로드 (URL은 경쟁사가 배너 내리면 만료되므로)
+            downloaded = self._download_images(page, image_urls, idx)
+            text       = self._visible_text(page)
 
             # 페이지에서 실제 제목 추출 (슬러그보다 정확한 한국어 제목)
             page_title = page.evaluate("""
@@ -46,12 +48,13 @@ class BaseCrawler(ABC):
             """)
 
             return {
-                "title": title or page_title,   # 목록에서 가져온 제목 우선
-                "page_title": page_title,        # 페이지 자체 제목은 별도 보관
+                "title": title or page_title,    # 목록에서 가져온 제목 우선
+                "page_title": page_title,         # 페이지 자체 제목은 별도 보관
                 "url": url,
                 "kv_screenshot": kv_shot,
                 "full_screenshot": full_shot,
-                "page_images": images[:20],
+                "page_images": image_urls[:20],   # 원본 URL (참조용)
+                "downloaded_images": downloaded,  # 로컬 저장 파일 경로 (영구 보관)
                 "page_text": text,
             }
         except Exception as e:
@@ -87,6 +90,27 @@ class BaseCrawler(ABC):
         path = self.img_dir / f"{name}.png"
         page.screenshot(path=str(path), full_page=full_page)
         return str(path)
+
+    def _download_images(self, page: Page, urls: list, promo_idx: int, max_imgs: int = 20) -> list:
+        """이미지 URL을 실제 파일로 다운로드. Playwright request 사용 (쿠키·Referer 자동 포함)."""
+        saved = []
+        for i, url in enumerate(urls[:max_imgs]):
+            try:
+                response = page.request.get(url, timeout=10000)
+                if not response.ok:
+                    continue
+                # 확장자 추출 (쿼리스트링 제거 후)
+                clean_url = url.split("?")[0]
+                ext = clean_url.rsplit(".", 1)[-1].lower()
+                if ext not in ("jpg", "jpeg", "png", "gif", "webp", "avif"):
+                    ext = "jpg"
+                path = self.img_dir / f"promo_{promo_idx:02d}_img_{i+1:02d}.{ext}"
+                path.write_bytes(response.body())
+                saved.append(str(path))
+            except Exception as e:
+                print(f"    이미지 다운로드 실패 [{i+1}] {url[:60]}: {e}")
+        print(f"    배너 이미지 {len(saved)}/{len(urls[:max_imgs])}개 저장 완료")
+        return saved
 
     def _large_images(self, page: Page, min_width: int = 200) -> list:
         """배너·KV·섹션 이미지 수집. lazy load 대응 + <picture> + srcset 포함."""
