@@ -7,6 +7,33 @@ weekly-competitor-crawl:
   script:
     - pip install -r requirements.txt
     - python crawler/main.py
+
+    # GitLab REST API로 JSON 파일 커밋 (git push 대신)
+    - TODAY=$(date +%Y-%m-%d)
+    - FILE_PATH="data/${TODAY}.json"
+    - FILE_CONTENT=$(base64 -w 0 ${FILE_PATH})
+    - |
+      RESPONSE=$(curl --silent --output /dev/null --write-out "%{http_code}" \
+        --request POST \
+        --header "PRIVATE-TOKEN: ${CI_PUSH_TOKEN}" \
+        --header "Content-Type: application/json" \
+        --data "{
+          \"branch\": \"main\",
+          \"commit_message\": \"chore: weekly competitor data ${TODAY}\",
+          \"actions\": [{
+            \"action\": \"create\",
+            \"file_path\": \"${FILE_PATH}\",
+            \"content\": \"${FILE_CONTENT}\",
+            \"encoding\": \"base64\"
+          }]
+        }" \
+        "${CI_SERVER_URL}/api/v4/projects/${CI_PROJECT_ID}/repository/commits")
+      echo "API 응답 코드: ${RESPONSE}"
+      if [ "$RESPONSE" = "201" ]; then
+        echo "✅ GitLab API 커밋 성공"
+      else
+        echo "⚠️ API 커밋 실패 (${RESPONSE}) - Artifacts에서 수동 다운로드 필요"
+      fi
   artifacts:
     name: "competitor-data-$CI_PIPELINE_CREATED_AT"
     paths:
