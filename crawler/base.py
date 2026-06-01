@@ -23,7 +23,8 @@ class BaseCrawler(ABC):
         pass
 
     # ── 공통 상세 수집 ────────────────────────────────────────────
-    def get_promo_detail(self, page: Page, title: str, url: str, idx: int) -> dict:
+    def get_promo_detail(self, page: Page, title: str, url: str, idx: int,
+                         listing_banner_url: str | None = None) -> dict:
         """개별 프로모션 페이지 진입 → 스크린샷·텍스트·이미지 수집."""
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -34,8 +35,8 @@ class BaseCrawler(ABC):
 
             kv_shot   = self._screenshot(page, f"promo_{idx:02d}_kv",   full_page=False)
             full_shot = self._screenshot(page, f"promo_{idx:02d}_full", full_page=True)
-            # 배너 이미지 1장만 다운로드 (와이드 KV 배너)
-            banner    = self._download_banner(page, idx)
+            # 목록 페이지에서 수집한 배너 URL로 직접 다운로드
+            banner    = self._download_banner(page, idx, listing_banner_url)
             text      = self._visible_text(page)
 
             # 페이지에서 실제 제목 추출 (슬러그보다 정확한 한국어 제목)
@@ -72,7 +73,10 @@ class BaseCrawler(ABC):
         for i, promo in enumerate(promos):
             label = promo.get("title", "")[:40]
             print(f"  [{i+1}/{len(promos)}] {label}")
-            detail = self.get_promo_detail(page, promo["title"], promo["url"], i)
+            detail = self.get_promo_detail(
+                page, promo["title"], promo["url"], i,
+                listing_banner_url=promo.get("banner_url")  # 목록에서 수집한 배너 URL
+            )
             results.append(detail)
 
         return {
@@ -89,58 +93,16 @@ class BaseCrawler(ABC):
         page.screenshot(path=str(path), full_page=full_page)
         return str(path)
 
-    def _download_banner(self, page: Page, promo_idx: int) -> str | None:
-        """메인 배너(KV) 이미지 1장만 다운로드.
-        - getBoundingClientRect()로 실제 렌더링 크기 기준 (naturalWidth=0인 lazy load 대응)
-        - <img> 태그 우선, 없으면 CSS background-image 폴백
-        - 와이드형(가로:세로 ≥ 1.5, 가로 ≥ 300px) 중 면적이 가장 큰 것을 배너로 판단"""
-        # 맨 위로 올려서 배너 영역 lazy load 트리거
-        page.evaluate("window.scrollTo(0, 0)")
-        page.wait_for_timeout(500)
-
-        banner_url = page.evaluate("""
-            () => {
-                let best = null, bestArea = 0;
-
-                // 1) <img> 태그 — getBoundingClientRect 기준 (lazy load 대응)
-                document.querySelectorAll('img').forEach(img => {
-                    const rect = img.getBoundingClientRect();
-                    const w = rect.width  || img.naturalWidth  || img.width  || 0;
-                    const h = rect.height || img.naturalHeight || img.height || 1;
-                    if (w < 300) return;
-                    if (w / h < 1.5) return;   // 세로형 상품 이미지 제외
-                    const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
-                    if (!src || src.startsWith('data:')) return;
-                    const area = w * h;
-                    if (area > bestArea) { bestArea = area; best = src; }
-                });
-
-                // 2) CSS background-image 폴백 (<img>로 못 찾은 경우)
-                if (!best) {
-                    const sel = [
-                        '[class*="banner"]','[class*="kv"]','[class*="hero"]',
-                        '[class*="visual"]','[class*="main-img"]','[class*="top-img"]'
-                    ].join(',');
-                    document.querySelectorAll(sel).forEach(el => {
-                        const rect = el.getBoundingClientRect();
-                        if (rect.width < 300 || rect.width / (rect.height || 1) < 1.5) return;
-                        const bg = window.getComputedStyle(el).backgroundImage;
-                        const m = bg && bg.match(/url\\(["']?([^"')]+)["']?\\)/);
-                        if (m && m[1] && !m[1].startsWith('data:')) {
-                            const area = rect.width * rect.height;
-                            if (area > bestArea) { bestArea = area; best = m[1]; }
-                        }
-                    });
-                }
-                return best;
-            }
-        """)
+    def _download_banner(self, page: Page, promo_idx: int,
+                         banner_url: str | None = None) -> str | None:
+        """목록 페이지에서 수집한 배너 URL을 파일로 저장."""
         if not banner_url:
-            print(f"    배너 이미지를 찾지 못했어요 (promo_{promo_idx:02d})")
+            print(f"    배너 URL 없음 (promo_{promo_idx:02d})")
             return None
         try:
             response = page.request.get(banner_url, timeout=10000)
             if not response.ok:
+                print(f"    배너 다운로드 실패 (HTTP {response.status}): {banner_url[:60]}")
                 return None
             ext = banner_url.split("?")[0].rsplit(".", 1)[-1].lower()
             if ext not in ("jpg", "jpeg", "png", "gif", "webp", "avif"):
@@ -150,7 +112,7 @@ class BaseCrawler(ABC):
             print(f"    배너 이미지 저장: {path.name}")
             return str(path)
         except Exception as e:
-            print(f"    배너 이미지 다운로드 실패: {e}")
+            print(f"    배너 다운로드 실패: {e}")
             return None
 
     def _large_images(self, page: Page, min_width: int = 200) -> list:

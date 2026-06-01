@@ -39,8 +39,9 @@ class KurlyCrawler(BaseCrawler):
                     const img = a.querySelector('img');
                     const alt = (img?.alt || '').replace(/^메인배너[_\\s]*/i, '').trim();
                     const title = alt || slug;
+                    const banner_url = img?.src || img?.dataset?.src || '';
                     seen.add(href);
-                    results.push({{ title: title.slice(0, 60), url: href }});
+                    results.push({{ title: title.slice(0, 60), url: href, banner_url }});
                 }});
                 return results.slice(0, 8);
             }}

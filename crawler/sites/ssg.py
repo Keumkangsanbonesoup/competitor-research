@@ -25,11 +25,13 @@ class SSGCrawler(BaseCrawler):
                     const titleEl = card.querySelector(
                         '[class*="tit"], [class*="title"], [class*="name"], h2, h3, p.desc, strong'
                     );
-                    const imgAlt = a.querySelector('img')?.alt || '';
+                    const img = a.querySelector('img');
+                    const imgAlt = img?.alt || '';
                     const title = (titleEl?.innerText || imgAlt || '').trim();
                     if (!title || !a.href) return;
+                    const banner_url = img?.src || img?.dataset?.src || '';
                     seen.add(a.href);
-                    results.push({ title: title.slice(0, 60), url: a.href });
+                    results.push({ title: title.slice(0, 60), url: a.href, banner_url });
                 });
                 return results.slice(0, 8);
             }
