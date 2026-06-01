@@ -88,13 +88,55 @@ class BaseCrawler(ABC):
         page.screenshot(path=str(path), full_page=full_page)
         return str(path)
 
-    def _large_images(self, page: Page, min_width: int = 300) -> list:
+    def _large_images(self, page: Page, min_width: int = 200) -> list:
+        """배너·KV·섹션 이미지 수집. lazy load 대응 + <picture> + srcset 포함."""
+        # 스크롤해서 lazy load 이미지 트리거
+        page.evaluate("""
+            () => {
+                const h = document.body.scrollHeight;
+                [0.25, 0.5, 0.75, 1.0].forEach(p => window.scrollTo(0, h * p));
+            }
+        """)
+        page.wait_for_timeout(800)
+
         return page.evaluate(f"""
-            () => Array.from(document.images)
-                .filter(img => img.naturalWidth >= {min_width})
-                .map(img => img.src)
-                .filter(src => src && !src.startsWith('data:'))
-                .slice(0, 30)
+            () => {{
+                const seen = new Set();
+                const add = src => {{
+                    if (!src || src.startsWith('data:') || seen.has(src)) return;
+                    seen.add(src);
+                }};
+
+                // 1) <img> — naturalWidth 또는 width 기준
+                document.querySelectorAll('img').forEach(img => {{
+                    const w = img.naturalWidth || img.width || 0;
+                    if (w < {min_width}) return;
+                    const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
+                    add(src);
+                    // srcset에서 가장 큰 URL 추출
+                    if (img.srcset) {{
+                        const best = img.srcset.split(',').map(s => s.trim().split(' ')[0]).pop();
+                        if (best) add(best);
+                    }}
+                }});
+
+                // 2) <picture> > <source>
+                document.querySelectorAll('picture source').forEach(s => {{
+                    const url = (s.srcset || '').split(',')[0].trim().split(' ')[0];
+                    if (url) add(url);
+                }});
+
+                // 3) CSS background-image (배너 섹션에 많음)
+                document.querySelectorAll(
+                    '[class*="banner"], [class*="kv"], [class*="hero"], [class*="visual"], section, div[style]'
+                ).forEach(el => {{
+                    const bg = window.getComputedStyle(el).backgroundImage;
+                    const m = bg && bg.match(/url\\(["']?([^"')]+)["']?\\)/);
+                    if (m && m[1]) add(m[1]);
+                }});
+
+                return Array.from(seen).slice(0, 40);
+            }}
         """)
 
     def _visible_text(self, page: Page, max_chars: int = 3000) -> str:
