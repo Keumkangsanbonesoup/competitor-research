@@ -6,7 +6,7 @@ from playwright.sync_api import Page
 
 
 class BaseCrawler(ABC):
-    MAX_PROMOTIONS = 5  # 사이트당 최대 수집할 프로모션 수
+    MAX_PROMOTIONS = 3  # 사이트당 최대 수집 (상단 노출=대형·중요 프로모션 우선)
 
     def __init__(self, site_key: str, site_name: str, listing_url: str):
         self.site_key = site_key
@@ -28,32 +28,53 @@ class BaseCrawler(ABC):
         """개별 프로모션 페이지 진입 → 스크린샷·텍스트·이미지 수집."""
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
-            # 스크롤해서 전체 콘텐츠 로드
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2500)
 
-            kv_shot   = self._screenshot(page, f"promo_{idx:02d}_kv",   full_page=False)
+            # ① KV(첫 화면)는 반드시 '최상단'에서 촬영 (스크롤 전)
+            #    - 이전 버그: 페이지 중간으로 스크롤한 뒤 찍어 SSG 등 긴 페이지의
+            #      KV가 본문 중간(유의사항·상품그리드)으로 잡혔음.
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(600)
+            kv_shot = self._screenshot(page, f"promo_{idx:02d}_kv", full_page=False)
+
+            # ② 전체 페이지: lazy 이미지 로드를 위해 단계적으로 스크롤 후 촬영
+            page.evaluate("""
+                () => {
+                    const h = document.body.scrollHeight;
+                    [0.25, 0.5, 0.75, 1.0].forEach(p => window.scrollTo(0, h * p));
+                }
+            """)
+            page.wait_for_timeout(1500)
+            page.evaluate("window.scrollTo(0, 0)")
+            page.wait_for_timeout(400)
             full_shot = self._screenshot(page, f"promo_{idx:02d}_full", full_page=True)
-            # 목록 페이지에서 수집한 배너 URL로 직접 다운로드
-            banner    = self._download_banner(page, idx, listing_banner_url)
-            text      = self._visible_text(page)
 
-            # 페이지에서 실제 제목 추출 (슬러그보다 정확한 한국어 제목)
+            banner = self._download_banner(page, idx, listing_banner_url)
+            text   = self._visible_text(page)
+
+            # 페이지 제목 추출: og:title 우선(헤더 로고 'SSG.COM' 회피)
             page_title = page.evaluate("""
                 () => {
-                    const h = document.querySelector('h1, h2, [class*="title"], [class*="tit"]');
+                    const og = document.querySelector('meta[property="og:title"]')?.content;
+                    if (og && og.trim()) return og.trim().split('\\n')[0].slice(0, 80);
+                    const sel = 'main h1, main h2, [class*="event"] [class*="tit"], [class*="visual"] [class*="tit"], h1, h2';
+                    const h = document.querySelector(sel);
                     return (h?.innerText || document.title || '').trim().split('\\n')[0].slice(0, 80);
                 }
             """)
 
+            GENERIC = {"SSG.COM", "SSG", "전체 알림", "고객행복센터", "유의사항",
+                       "쿠폰 유의사항", "카드사 쿠폰 유의사항", ""}
+            final_title = page_title if (not title or title.strip() in GENERIC) else title
+
             return {
-                "title": title or page_title,  # 목록에서 가져온 제목 우선
-                "page_title": page_title,       # 페이지 자체 제목은 별도 보관
+                "title": final_title or page_title,
+                "listing_title": title,
+                "page_title": page_title,
                 "url": url,
                 "kv_screenshot": kv_shot,
                 "full_screenshot": full_shot,
-                "banner_image": banner,         # 메인 배너 1장 (영구 보관용 로컬 파일)
+                "banner_image": banner,
                 "page_text": text,
             }
         except Exception as e:
@@ -75,7 +96,7 @@ class BaseCrawler(ABC):
             print(f"  [{i+1}/{len(promos)}] {label}")
             detail = self.get_promo_detail(
                 page, promo["title"], promo["url"], i,
-                listing_banner_url=promo.get("banner_url")  # 목록에서 수집한 배너 URL
+                listing_banner_url=promo.get("banner_url")
             )
             results.append(detail)
 
@@ -117,7 +138,6 @@ class BaseCrawler(ABC):
 
     def _large_images(self, page: Page, min_width: int = 200) -> list:
         """배너·KV·섹션 이미지 수집. lazy load 대응 + <picture> + srcset 포함."""
-        # 스크롤해서 lazy load 이미지 트리거
         page.evaluate("""
             () => {
                 const h = document.body.scrollHeight;
@@ -133,35 +153,27 @@ class BaseCrawler(ABC):
                     if (!src || src.startsWith('data:') || seen.has(src)) return;
                     seen.add(src);
                 }};
-
-                // 1) <img> — naturalWidth 또는 width 기준
                 document.querySelectorAll('img').forEach(img => {{
                     const w = img.naturalWidth || img.width || 0;
                     if (w < {min_width}) return;
                     const src = img.src || img.dataset.src || img.dataset.lazySrc || '';
                     add(src);
-                    // srcset에서 가장 큰 URL 추출
                     if (img.srcset) {{
                         const best = img.srcset.split(',').map(s => s.trim().split(' ')[0]).pop();
                         if (best) add(best);
                     }}
                 }});
-
-                // 2) <picture> > <source>
                 document.querySelectorAll('picture source').forEach(s => {{
                     const url = (s.srcset || '').split(',')[0].trim().split(' ')[0];
                     if (url) add(url);
                 }});
-
-                // 3) CSS background-image (배너 섹션에 많음)
                 document.querySelectorAll(
                     '[class*="banner"], [class*="kv"], [class*="hero"], [class*="visual"], section, div[style]'
                 ).forEach(el => {{
                     const bg = window.getComputedStyle(el).backgroundImage;
-                    const m = bg && bg.match(/url\\(["']?([^"')]+)["']?\\)/);
+                    const m = bg && bg.match(/url\(["']?([^"')]+)["']?\)/);
                     if (m && m[1]) add(m[1]);
                 }});
-
                 return Array.from(seen).slice(0, 40);
             }}
         """)
@@ -175,7 +187,7 @@ class BaseCrawler(ABC):
                     if (blocked.has(n.tagName)) return '';
                     return Array.from(n.childNodes).map(walk).join(' ');
                 };
-                return walk(document.body).replace(/\\s+/g, ' ').trim();
+                return walk(document.body).replace(/\s+/g, ' ').trim();
             }
         """)
         return text[:max_chars]
