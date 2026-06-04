@@ -1,76 +1,108 @@
-from playwright.sync_api import Page
-from playwright_stealth import stealth_sync
+import json
 
 from base import BaseCrawler
+
+HOME_URL = "https://www.coupang.com/"
+CAMPAIGNS_URL = "https://www.coupang.com/np/campaigns/"
 
 
 class CoupangCrawler(BaseCrawler):
     """
-    쿠팡 크롤러.
-    /np/campaigns/ 는 Akamai에 IP 차단됨 → 메인 페이지에서
-    프로모션 배너 링크를 추출하는 방식으로 우회.
+    쿠팡 크롤러 (Scrapling/Camoufox 기반 Akamai 우회 시도).
+    패턴: 메인 진입 → 20초 대기(Akamai JS 챌린지 자동 해결) → 캠페인 페이지 이동 → 배너 추출.
+    - 공유 playwright page 대신 Scrapling StealthyFetcher(Camoufox) 사용 → crawl() 오버라이드.
+    - 실패/차단 시 빈 목록 + 진단만 남기고 정상 종료(다른 사이트 영향 없음).
     """
-    LISTING_URL = "https://www.coupang.com/"
+    LISTING_URL = HOME_URL
 
     def __init__(self):
         super().__init__("coupang", "쿠팡", self.LISTING_URL)
 
-    def get_promo_urls(self, page: Page) -> list:
-        # stealth 재적용 (새 navigation 후에도 유지)
-        stealth_sync(page)
-        page.goto(self.listing_url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)
+    def get_promo_urls(self, page):
+        return []  # 미사용 (crawl 오버라이드)
 
-        # 403 차단 감지
-        if "Access Denied" in page.title() or "Access Denied" in page.content()[:500]:
-            print("  ⚠️  쿠팡 메인도 차단됨 — 빈 목록 반환")
-            return []
+    def _result(self, promos, note=None, error=None):
+        d = {"site": self.site_key, "site_name": self.site_name,
+             "crawled_at": self.crawled_at, "listing_url": self.listing_url,
+             "promotions": promos}
+        if note: d["note"] = note
+        if error: d["error"] = error
+        return d
 
-        # 메인 페이지에서 캠페인/기획전 링크 추출
-        # 쿠팡은 /np/campaigns/, /np/categories/, /deal/ 등 패턴 사용
-        promos = page.evaluate("""
-            () => {
-                const seen = new Set();
-                const results = [];
-                document.querySelectorAll('a[href]').forEach(a => {
-                    const href = a.href || '';
-                    const isPromo = (
-                        href.includes('/np/campaigns/') ||
-                        href.includes('/np/promotion/') ||
-                        href.includes('/deal/') ||
-                        href.includes('/np/search/?q=') && a.closest('[class*="event"]')
-                    );
-                    if (!isPromo || seen.has(href)) return;
-                    const img = a.querySelector('img');
-                    const title = (img?.alt || a.innerText || '').trim().slice(0, 60)
-                        || href.split('/').filter(Boolean).pop();
-                    if (!title) return;
-                    seen.add(href);
-                    results.push({ title, url: href });
-                });
-                return results.slice(0, 8);
-            }
-        """)
+    def crawl(self, page):
+        try:
+            from scrapling.fetchers import StealthyFetcher
+        except Exception as e:
+            print(f"  [쿠팡] Scrapling 미설치: {e}")
+            return self._result([], error=f"scrapling import 실패: {e}")
 
-        # 링크가 없으면 메인 배너 영역의 첫 번째 링크라도 수집
-        if not promos:
-            promos = page.evaluate("""
-                () => {
-                    const seen = new Set();
-                    const bannerLinks = [];
-                    document.querySelectorAll('a[href]').forEach(a => {
-                        const img = a.querySelector('img');
-                        if (!img || !img.naturalWidth || img.naturalWidth < 200) return;
-                        const href = a.href;
-                        if (seen.has(href) || !href.startsWith('http')) return;
-                        seen.add(href);
-                        bannerLinks.push({
-                            title: img.alt || a.innerText.trim() || '쿠팡 프로모션',
-                            url: href,
+        img_dir = self.img_dir
+        box = {"denied": None, "title": "", "promos": [], "err": None}
+
+        def action(pg):
+            try:
+                # 1) 메인에서 Akamai JS 챌린지 해결 대기
+                pg.wait_for_timeout(20000)
+                # 2) 캠페인(이벤트) 페이지로 이동
+                pg.goto(CAMPAIGNS_URL, wait_until="domcontentloaded", timeout=40000)
+                pg.wait_for_timeout(4000)
+                for p in [0.25, 0.5, 0.75, 0.0]:
+                    pg.evaluate(f"window.scrollTo(0, document.body.scrollHeight*{p})")
+                    pg.wait_for_timeout(700)
+                box["title"] = pg.title()
+                content = pg.content()
+                if "Access Denied" in box["title"] or "Access Denied" in content[:1500]:
+                    box["denied"] = True
+                    return pg
+                box["denied"] = False
+                # 캠페인 페이지 전체 스크린샷
+                try:
+                    pg.screenshot(path=str(img_dir / "campaigns_full.png"), full_page=True)
+                except Exception:
+                    pass
+                # 상단 배너/캠페인 링크 추출 (폭 큰 이미지 링크)
+                box["promos"] = pg.evaluate("""
+                    () => {
+                        const seen=new Set(); const out=[];
+                        document.querySelectorAll('a[href]').forEach(a=>{
+                            const img=a.querySelector('img'); if(!img) return;
+                            const w=img.naturalWidth||img.width||0; if(w<200) return;
+                            const href=a.href||''; if(!href.startsWith('http')||seen.has(href)) return;
+                            seen.add(href);
+                            out.push({title:(img.alt||a.innerText||'쿠팡 프로모션').trim().slice(0,70),
+                                      url:href, banner_url:img.src||img.dataset?.src||''});
                         });
-                    });
-                    return bannerLinks.slice(0, 5);
-                }
-            """)
+                        return out.slice(0,8);
+                    }
+                """)
+            except Exception as e:
+                box["err"] = str(e)[:200]
+            return pg
 
-        return promos
+        try:
+            StealthyFetcher.fetch(HOME_URL, headless=True, network_idle=True,
+                                  page_action=action, timeout=120000)
+        except Exception as e:
+            print(f"  [쿠팡] Scrapling fetch 실패: {e}")
+            return self._result([], error=f"scrapling fetch 실패: {e}")
+
+        # 진단 저장
+        try:
+            (img_dir / "_debug_coupang.json").write_text(json.dumps(
+                {"denied": box["denied"], "title": box["title"],
+                 "n_promos": len(box["promos"]), "err": box["err"]},
+                ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        print(f"  [쿠팡] denied={box['denied']} title={box['title']!r} promos={len(box['promos'])}")
+
+        if box["denied"] or not box["promos"]:
+            return self._result([], note="Scrapling 시도 — 차단/빈결과", error=box["err"])
+
+        promos = []
+        for i, pr in enumerate(box["promos"][:3]):
+            promos.append({"title": pr.get("title") or "쿠팡 프로모션",
+                           "url": pr.get("url"), "banner_url": pr.get("banner_url"),
+                           "kv_screenshot": "data/%s/coupang/campaigns_full.png" % self.crawled_at,
+                           "page_text": ""})
+        return self._result(promos, note="Scrapling/Camoufox 성공")

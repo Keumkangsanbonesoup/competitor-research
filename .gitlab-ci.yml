@@ -6,6 +6,7 @@ weekly-competitor-crawl:
   image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
   script:
     - pip install -r requirements.txt
+    - python -m camoufox fetch  # Scrapling용 Camoufox 브라우저 다운로드(쿠팡 우회)
     - python crawler/main.py
 
     # === 결과 JSON 커밋 ===
