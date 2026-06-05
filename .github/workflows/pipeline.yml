@@ -1,0 +1,65 @@
+name: 경쟁사 프로모션 모니터링
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # 매주 월요일 오전 10시 (KST)
+  workflow_dispatch:      # 수동 실행
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install -r requirements.txt
+      - run: python crawler/main.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data
+          path: data/
+          retention-days: 1
+
+  generate_report:
+    needs: crawl
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: data/
+      - run: pip install -r requirements.txt
+      - run: python crawler/build_report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy
+          path: _deploy/
+          retention-days: 1
+
+  build:
+    needs: generate_report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deploy
+          path: _deploy/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _deploy/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
