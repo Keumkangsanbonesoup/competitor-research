@@ -78,7 +78,7 @@ def fallback_refine(title, raw_text):
 # ---------- 이미지 준비 ----------
 def prep_images(date, site, idx, src_dir):
     """full(또는 kv) 상단 크롭 + 배너 → _deploy/img/ 로 저장, 상대경로 반환."""
-    out = {"thumb": "", "banner": ""}
+    out = {"thumb": "", "full": "", "banner": ""}
     try:
         from PIL import Image
         Image.MAX_IMAGE_PIXELS = None
@@ -92,6 +92,9 @@ def prep_images(date, site, idx, src_dir):
             name = f"{site}_promo_{idx:02d}_top.jpg"
             crop.save(os.path.join(IMG, name), "JPEG", quality=82)
             out["thumb"] = "img/" + name
+            fname = f"{site}_promo_{idx:02d}_full.jpg"
+            im.save(os.path.join(IMG, fname), "JPEG", quality=80)
+            out["full"] = "img/" + fname
     except Exception as e:
         print(f"    [thumb 실패] {site}/{idx}: {e}")
     for b in glob.glob(os.path.join(src_dir, f"promo_{idx:02d}_banner.*")):
@@ -124,8 +127,14 @@ def render(date, sites):
         cards = ""
         for idx, p in enumerate(s["promos"]):
             media = ""
-            if p.get("banner"): media += f'<figure><figcaption>진입 배너</figcaption><img loading="lazy" src="{p["banner"]}"></figure>'
-            if p.get("thumb"): media += f'<figure><figcaption>기획전 첫 화면</figcaption><img loading="lazy" src="{p["thumb"]}"></figure>'
+            def fig(cap, thumb, fullimg):
+                if not thumb: return ""
+                full = fullimg or thumb
+                return (f'<figure class="zoom" data-full="{full}"><figcaption>{cap}</figcaption>'
+                        f'<div class="imgwrap"><img loading="lazy" src="{thumb}">'
+                        f'<span class="zoombadge">&#128269; 크게 보기</span></div></figure>')
+            if p.get("banner"): media += fig("진입 배너", p.get("banner"), p.get("banner"))
+            if p.get("thumb"):  media += fig("기획전 첫 화면", p.get("thumb"), p.get("full"))
             chips = "".join(f'<span class="chip"><b>{esc(c.get("tag",""))}</b><i>{esc(c.get("desc",""))}</i></span>' for c in p.get("coupons", []))
             coupon_row = f'<div class="row hl-c"><h4>쿠폰 스킴</h4><div class="chips">{chips}</div></div>' if chips else ""
             def row(lbl, val, cls=""):
@@ -151,7 +160,7 @@ def render(date, sites):
 document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
 document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
 b.classList.add("active");document.getElementById("p-"+b.dataset.t).classList.add("active");
-window.scrollTo({{top:0,behavior:"smooth"}});}});}});</script></body></html>"""
+window.scrollTo({{top:0,behavior:"smooth"}});}});}});(function(){{var lb=document.createElement("div");lb.id="lightbox";lb.innerHTML='<span id="lbclose">&times;</span><img id="lbimg">';document.body.appendChild(lb);var lbimg=lb.querySelector("#lbimg");document.querySelectorAll(".zoom").forEach(function(f){{f.addEventListener("click",function(){{var src=f.getAttribute("data-full");if(!src)return;lbimg.src=src;lb.classList.add("on");}});}});lb.addEventListener("click",function(){{lb.classList.remove("on");lbimg.src="";}});}})();</script></body></html>"""
     return html
 
 def main():
