@@ -8,12 +8,23 @@ on:
 jobs:
   crawl:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     container:
       image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
       - run: pip install -r requirements.txt
       - run: python crawler/main.py
+      - name: 수집 데이터 커밋 (data/*.json)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.json
+          git diff --cached --quiet || git commit -m "data: $(date -u +%Y-%m-%d) 경쟁사 수집"
+          git push
       - uses: actions/upload-artifact@v4
         with:
           name: data
@@ -23,19 +34,45 @@ jobs:
   generate_report:
     needs: crawl
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     container:
       image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: main
       - uses: actions/download-artifact@v4
         with:
           name: data
           path: data/
       - run: pip install -r requirements.txt
+      - name: 이전 주차 파일 복원
+        run: |
+          if [ -d pages_archive ]; then
+            mkdir -p _deploy
+            cp -r pages_archive/. _deploy/
+            echo "이전 주차 복원 완료"
+          else
+            echo "첫 실행 — 복원할 아카이브 없음"
+          fi
       - run: python crawler/build_report.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          SONGBIRD_BASE_URL: https://keumkangsanbonesoup.github.io/competitor-research/
+      - name: 이번 주차 아카이브 커밋
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdir -p pages_archive/img
+          cp _deploy/weeks.json pages_archive/
+          cp _deploy/*.html pages_archive/
+          if [ -d _deploy/img ]; then
+            cp -r _deploy/img/. pages_archive/img/
+          fi
+          git add pages_archive/
+          git diff --cached --quiet || git commit -m "archive: 주차별 리포트 누적 저장"
+          git push
       - uses: actions/upload-artifact@v4
         with:
           name: deploy

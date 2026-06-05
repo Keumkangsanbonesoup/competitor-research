@@ -148,19 +148,17 @@ def prep_images(weekkey, site, idx, src_dir):
 
 # ---------- weeks.json (누적 목록) ----------
 def load_weeks():
-    # 1) 발행 사이트에서 기존 목록 가져오기(누적)
-    try:
-        import requests
-        r = requests.get(BASE_URL + "weeks.json", timeout=8)
-        if r.ok: return r.json()
-    except Exception as e:
-        print(f"    [weeks.json fetch 실패 → 폴백] {e}")
-    # 2) 로컬 폴백
-    p = os.path.join(DEPLOY, "weeks.json")
-    if os.path.exists(p):
-        try: return json.load(open(p, encoding="utf-8"))
-        except Exception: pass
-    return []
+    """data/*.json 파일을 스캔해 주차 목록 생성 (네트워크 불필요)."""
+    weeks = {}
+    for f in sorted(glob.glob(os.path.join(DATA_DIR, "20*.json"))):
+        date = os.path.basename(f)[:-5]
+        try:
+            key, label = week_info(date)
+            # 같은 주차면 최신 날짜로 갱신
+            weeks[key] = {"key": key, "label": label, "date": date}
+        except Exception:
+            continue
+    return sorted(weeks.values(), key=lambda w: w["key"], reverse=True)
 
 # ---------- HTML ----------
 def esc(s):
@@ -240,7 +238,7 @@ def render(weekkey, weeklabel, date, sites, weeks):
 <div class="meta">수집일 {date} · 대상 3개 사이트(쿠팡 제외) · Gemini 자동 정제 · 작성 B마트마케팅팀 김예인</div>
 </div></header>
 <div class="wrap"><div class="tabs">{''.join(tabs)}</div>{''.join(panels)}{ref}
-<footer>경쟁사 프로모션 모니터링 · GitLab CI → Gemini 정제 → Songbird 배포 (자동)</footer>
+<footer>경쟁사 프로모션 모니터링 · GitHub Actions → Gemini 정제 → GitHub Pages 배포 (자동)</footer>
 </div></div>
 <script>
 document.querySelectorAll(".tab").forEach(function(b){{b.addEventListener("click",function(){{
