@@ -15,10 +15,15 @@ class NaverKurlyCrawler(BaseCrawler):
 
     def get_promo_urls(self, page: Page) -> list:
         page.goto(self.listing_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            page.wait_for_load_state("networkidle", timeout=12000)
+        except Exception:
+            pass
         page.wait_for_timeout(5000)
-        for pct in [0.25, 0.5, 0.75]:
+        # 배너 캐러셀 lazy 로드: 더 촘촘히 스크롤 + 대기 (프로모션 1개만 잡히는 문제 완화)
+        for pct in [0.2, 0.4, 0.6, 0.8, 0.4, 0.0]:
             page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {pct})")
-            page.wait_for_timeout(700)
+            page.wait_for_timeout(900)
 
         promos = page.evaluate("""
             () => {
