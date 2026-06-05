@@ -9,7 +9,7 @@ jobs:
 
   # ① 크롤링
   crawl:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -38,7 +38,7 @@ jobs:
   # ② 리포트 생성
   generate_report:
     needs: crawl
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -88,7 +88,7 @@ jobs:
   # ③ GitHub Pages 빌드
   build:
     needs: generate_report
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -101,7 +101,7 @@ jobs:
   # ④ GitHub Pages 배포
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       pages: write
       id-token: write
