@@ -26,27 +26,25 @@ def week_info(date_str):
     return key, label
 
 # ---------- Gemini 정제 ----------
-PROMPT = """너는 B마트마케팅팀의 경쟁사 프로모션 브리핑 에디터야.
-아래는 '{site}'의 프로모션 페이지에서 수집한 텍스트야. (제목: {title})
+PROMPT_BATCH = """너는 B마트마케팅팀의 경쟁사 프로모션 브리핑 에디터야.
+아래 JSON 배열은 여러 프로모션의 수집 텍스트야. 각 항목을 분석해 같은 순서로 돌려줘.
 
-[원칙] 브리핑은 '한눈에 스캔'이 목적이야. 길게 쓰지 말고 핵심만. 각 프로모션이 비슷한 분량이 되도록 압축해.
+[원칙] '한눈에 스캔'이 목적. 항목마다 비슷한 분량으로 짧게 압축.
 
-[항목별 작성 규칙 — 길이 엄수]
-- label: 프로모션 고유 명칭만. 최대 18자. 사이트명·따옴표·'프로모션/이벤트/기획전' 금지. 예) "알뜰 미식 단독 특가", "고래잇페스타".
-- benefit: 한 문장, 최대 50자. 이 프로모션이 주는 핵심 혜택 한 줄.
-- coupons: **행사 전체에 적용되는 공통 혜택/쿠폰만** 정리(예: 신규가입 쿠폰, 멤버십 할인, 카드 청구할인, 무료배송, 행사 대표 할인율). 하단 상품 목록·썸네일에 붙은 **개별 상품별 쿠폰(예: 특정 상품 15%/10%/3천원)은 절대 포함하지 마.** 최대 3개 칩. tag=핵심 숫자/혜택, desc=짧은 조건(최대 15자). 공통 혜택이 불명확하면 빈 배열 [].
-- category: 대표 카테고리 3~5개를 쉼표로. 최대 40자. 문장 금지.
-- feat: 한 문장, 최대 50자. 차별점/형식만. (기간·쿠폰조건 같은 세부는 빼고 핵심 특징만)
+[항목별 규칙 — 길이 엄수]
+- label: 프로모션 고유 명칭만, 최대 18자. 사이트명·따옴표·'프로모션/이벤트/기획전' 금지. 예) "알뜰 미식 단독 특가", "고래잇페스타".
+- benefit: 한 문장, 최대 50자(핵심 혜택 한 줄).
+- coupons: **행사 전체 공통 혜택만**(신규가입·멤버십·카드 청구할인·무료배송·행사 대표 할인율). 하단 상품 썸네일의 **개별 상품 쿠폰(15%/10%/3천원 등) 제외.** 최대 3개. tag=핵심 숫자/혜택, desc=짧은 조건(≤15자). 불명확하면 [].
+- category: 대표 카테고리 3~5개 쉼표, 최대 40자, 문장 금지.
+- feat: 한 문장, 최대 50자(차별점/형식만).
 - util: B마트 시사점 한 문장, 최대 60자.
-- 추측 금지(텍스트에 없으면 "정보 없음"). 같은 내용을 여러 항목에 반복하지 마.
-- 수집 텍스트에 행사 본문이 거의 없고 사이트 헤더/검색어 같은 잡음뿐이면, **제목(title)을 근거로 label과 benefit만** 채우고 나머지(coupons/category/feat/util)는 "정보 없음" 또는 빈 배열로 둬. 잡음 텍스트를 그대로 베껴 쓰지 마.
+- 추측 금지(없으면 "정보 없음"). text가 사이트 헤더/검색어 같은 잡음뿐이면 title을 근거로 label·benefit만 채우고 나머지는 "정보 없음"/[]. 잡음 베끼지 마.
 
-[출력 포맷] 아래 JSON으로만:
-{{"label":"...","benefit":"...","coupons":[{{"tag":"...","desc":"..."}}],
- "category":"...","feat":"...","util":"..."}}
+[출력] 입력과 동일한 개수·순서의 JSON만:
+{{"results":[{{"label":"...","benefit":"...","coupons":[{{"tag":"...","desc":"..."}}],"category":"...","feat":"...","util":"..."}}]}}
 
-[수집 텍스트]
-{raw}
+[입력]
+{items}
 """
 
 _GENAI = None      # 모듈 캐시
@@ -70,33 +68,43 @@ def _pick_model(genai):
     print(f"    [Gemini] 사용 모델: {_MODEL_NAME} (가용 {len(avail)}개)")
     return _MODEL_NAME
 
-def gemini_refine(site_name, title, raw_text):
+def gemini_batch(items):
+    """items: [{"site","title","text"}] → 한 번의 호출로 전체 분석. 결과 list 또는 None."""
     global _GENAI
     key = os.environ.get("GEMINI_API_KEY")
-    if not key: return None
+    if not key or not items: return None
     try:
+        import time
         if _GENAI is None:
             import google.generativeai as genai
-            genai.configure(api_key=key)
-            _GENAI = genai
+            genai.configure(api_key=key); _GENAI = genai
         genai = _GENAI
         mname = _pick_model(genai)
         model = genai.GenerativeModel(mname, generation_config={"response_mime_type": "application/json"})
-        prompt = PROMPT.format(site=site_name, title=title or "", raw=(raw_text or "")[:6000])
-        txt = None
-        for attempt in range(2):  # 빈/차단 응답 대비 1회 재시도
+        payload = [{"idx": n, "site": it["site"], "title": it.get("title") or "",
+                    "text": (it.get("text") or "")[:2500]} for n, it in enumerate(items)]
+        prompt = PROMPT_BATCH.format(items=json.dumps(payload, ensure_ascii=False))
+        for attempt in range(3):
             try:
                 resp = model.generate_content(prompt)
-                txt = resp.text
-                if txt and txt.strip():
-                    break
+                data = json.loads(resp.text)
+                res = data.get("results") if isinstance(data, dict) else data
+                if isinstance(res, list) and res:
+                    for r in res:
+                        if not isinstance(r.get("coupons"), list): r["coupons"] = []
+                    return res
+                return None
             except Exception as ie:
-                if attempt == 1: raise
-        data = json.loads(txt)
-        if not isinstance(data.get("coupons"), list): data["coupons"] = []
-        return data
+                msg = str(ie)
+                if "429" in msg and attempt < 2:
+                    m = re.search(r"retry.{0,12}?(\d+)", msg)
+                    delay = min(int(m.group(1)) if m else 25, 30)
+                    print(f"    [Gemini] 429 할당량 — {delay}s 후 재시도 ({attempt+1}/2)")
+                    time.sleep(delay); continue
+                if attempt == 2: raise
+        return None
     except Exception as e:
-        print(f"    [Gemini 실패] {site_name}/{title}: {e}")
+        print(f"    [Gemini 배치 실패] {e}")
         return None
 
 def fallback_refine(title, raw_text):
@@ -241,17 +249,32 @@ def main():
     os.makedirs(IMG, exist_ok=True)
     print(f"[build] data={data_path} week={weekkey}({weeklabel}) gemini={'ON' if os.environ.get('GEMINI_API_KEY') else 'OFF(폴백)'}")
 
-    sites = []
+    # 1) 모든 프로모션을 한 번에 모으기 (배치 호출용)
+    flat = []  # (key, name, accent, idx, pr, src_dir)
     for key, name, accent in SITES_ORDER:
-        promos = []
         src_dir = os.path.join(DATA_DIR, date, key)
         for idx, pr in enumerate((raw.get(key) or {}).get("promotions", [])[:3]):
             if pr.get("error"): continue
-            refined = gemini_refine(name, pr.get("title"), pr.get("page_text")) or fallback_refine(pr.get("title"), pr.get("page_text"))
-            imgs = prep_images(weekkey, key, idx, src_dir)
-            refined.update({"url": pr.get("url", "#"), **imgs})
-            promos.append(refined)
-        if promos: sites.append({"key": key, "name": name, "accent": accent, "promos": promos})
+            flat.append((key, name, accent, idx, pr, src_dir))
+
+    # 2) Gemini 배치 호출 (9요청 → 1요청; 할당량 절약)
+    items = [{"site": f[1], "title": f[4].get("title"), "text": f[4].get("page_text")} for f in flat]
+    refined_all = gemini_batch(items)
+    if refined_all is not None and len(refined_all) != len(flat):
+        print(f"    [경고] 배치 결과 수({len(refined_all)}) != 프로모션 수({len(flat)}) → 폴백 보정")
+
+    # 3) 사이트별 조립 (이미지 + 폴백)
+    by_site = {}
+    for n, (key, name, accent, idx, pr, src_dir) in enumerate(flat):
+        r = None
+        if refined_all and n < len(refined_all) and isinstance(refined_all[n], dict):
+            r = refined_all[n]
+        if not r or not r.get("label"):
+            r = fallback_refine(pr.get("title"), pr.get("page_text"))
+        imgs = prep_images(weekkey, key, idx, src_dir)
+        r.update({"url": pr.get("url", "#"), **imgs})
+        by_site.setdefault(key, {"key": key, "name": name, "accent": accent, "promos": []})["promos"].append(r)
+    sites = [by_site[k] for k, _, _ in SITES_ORDER if k in by_site]
 
     # weeks 목록 갱신(누적)
     weeks = load_weeks()
