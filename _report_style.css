@@ -62,3 +62,15 @@ footer{margin:36px 0 60px;font-size:12px;color:#9aa3b2;text-align:center}
 .chip{display:inline-flex;flex-direction:column;background:#fff;border:1px solid #f1e0c0;border-left:3px solid #e8a33d;border-radius:8px;padding:6px 11px;min-width:96px}
 .chip b{font-size:14px;font-weight:800;color:#a15c00;line-height:1.25}
 .chip i{font-size:11px;font-style:normal;color:#8a7355;margin-top:1px}
+/* 이미지 호버 '크게 보기' + 라이트박스 */
+.pc-media figure.zoom{margin:0 0 12px}
+.imgwrap{position:relative;cursor:zoom-in;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.imgwrap img{width:100%;display:block;border:0;border-radius:0}
+.zoombadge{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(17,20,28,.0);color:#fff;font-size:13px;font-weight:700;opacity:0;transition:.15s;pointer-events:none}
+.imgwrap:hover .zoombadge{opacity:1;background:rgba(17,20,28,.45)}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:none;
+  align-items:flex-start;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out}
+#lightbox.on{display:flex}
+#lightbox img{max-width:96vw;height:auto;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.5)}
+#lbclose{position:fixed;top:14px;right:22px;color:#fff;font-size:34px;line-height:1;cursor:pointer;font-weight:300}
