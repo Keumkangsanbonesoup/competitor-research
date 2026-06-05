@@ -1,27 +1,64 @@
-# Songbird 자동 배포 설정
-# 폴더 안의 모든 정적 파일(HTML, CSS, JS, 이미지 등)을 그대로 진열장에 올려요.
-# 새 파일을 추가해도 YAML은 더 안 고쳐도 돼요.
+# 경쟁사 프로모션 모니터링 + Songbird 발행 — 단일 .gitlab-ci.yml (잡 이름 모두 고유)
+# crawl(크롤링) → generate_report(Gemini 정제+HTML) → build(우리 리포트만 dist 패키징) → deploy(Songbird)
 
 include:
   - component: $CI_SERVER_FQDN/alattalatta/songbird/deploy@1.1.0
     inputs:
-      needs:
-        - build
+      needs: [build]
       outputdir: dist
       stage: deploy
 
 stages:
+  - crawl
+  - report
   - build
   - deploy
 
+# ① 크롤링 → data/<날짜>.json + 스크린샷
+crawl:
+  stage: crawl
+  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy   # ※ 개발팀 권고: wcr.baemin.in 사내 미러 검토
+  script:
+    - pip install -r requirements.txt
+    - python crawler/main.py
+  artifacts:
+    paths: [data/]
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+
+# ② Gemini 정제 + HTML 생성 → _deploy/index.html + _deploy/img/
+generate_report:
+  stage: report
+  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+  needs: [crawl]
+  script:
+    - pip install -r requirements.txt
+    - python crawler/build_report.py
+  artifacts:
+    paths: [_deploy/]
+    expire_in: 1 day
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+
+# ③ Songbird 패키징: 레포 전체가 아니라 '우리 리포트(_deploy)'만 dist로
 build:
-  image: alpine
   stage: build
+  image: alpine
+  needs: [generate_report]
   script:
     - mkdir -p dist
-    # 루트 폴더에 있는 거 전부 dist로 옮김 (단, dist 자신, .git, .gitlab-ci.yml은 제외)
-    - find . -mindepth 1 -maxdepth 1 ! -name dist ! -name '.git' ! -name '.gitlab-ci.yml' -exec cp -r {} dist/ \;
+    - cp -r _deploy/. dist/
   artifacts:
-    paths:
-      - dist
+    paths: [dist]
     expire_in: 5 mins
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+
+# ④ deploy 잡은 위 Songbird 컴포넌트가 dist/ 를 S3로 배포 (직접 작성 불필요)
