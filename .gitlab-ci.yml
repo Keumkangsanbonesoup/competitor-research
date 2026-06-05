@@ -1,5 +1,12 @@
 # 경쟁사 프로모션 모니터링 + Songbird 발행 — 단일 .gitlab-ci.yml (잡 이름 모두 고유)
-# crawl(크롤링) → generate_report(Gemini 정제+HTML) → build(우리 리포트만 dist 패키징) → deploy(Songbird)
+# crawl → generate_report(Gemini) → build(우리 리포트만 dist) → deploy(Songbird)
+#
+# ★ workflow:rules — 스케줄/수동(web) 실행일 때만 파이프라인 생성.
+#   (일반 push로는 파이프라인을 만들지 않음 → 잡이 일부만 생겨 needs가 깨지는 문제 방지)
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
 
 include:
   - component: $CI_SERVER_FQDN/alattalatta/songbird/deploy@1.1.0
@@ -24,10 +31,6 @@ crawl:
   artifacts:
     paths: [data/]
     expire_in: 1 day
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
 
 # ② Gemini 정제 + HTML 생성 → _deploy/index.html + _deploy/img/
 generate_report:
@@ -40,12 +43,8 @@ generate_report:
   artifacts:
     paths: [_deploy/]
     expire_in: 1 day
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
 
-# ③ Songbird 패키징: 레포 전체가 아니라 '우리 리포트(_deploy)'만 dist로
+# ③ Songbird 패키징: 우리 리포트(_deploy)만 dist로
 build:
   stage: build
   image: alpine
@@ -56,9 +55,5 @@ build:
   artifacts:
     paths: [dist]
     expire_in: 5 mins
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
 
-# ④ deploy 잡은 위 Songbird 컴포넌트가 dist/ 를 S3로 배포 (직접 작성 불필요)
+# ④ deploy 잡은 위 Songbird 컴포넌트가 dist/ 를 S3로 배포
