@@ -33,6 +33,7 @@ class NaverKurlyCrawler(BaseCrawler):
                 const isPromo = href =>
                     href.includes('kurlynmart/bundle-groups') ||
                     href.includes('kurlynmart/bundles') ||
+                    href.includes('kurlynmart/festa') ||
                     href.includes('shopping.naver.com/festa');
 
                 document.querySelectorAll('a[href]').forEach(a => {
@@ -40,10 +41,13 @@ class NaverKurlyCrawler(BaseCrawler):
                     if (!isPromo(href) || seen.has(href)) return;
                     const img = a.querySelector('img');
                     if (!img) return;
-                    const w = img.naturalWidth || img.width || 0;
-                    if (w < 200) return;
+                    // headless 환경에선 naturalWidth=0인 경우가 많아 rect 크기로 대체
+                    const rect = a.getBoundingClientRect();
+                    const naturalW = img.naturalWidth || img.width || 0;
+                    const renderedW = rect.width || 0;
+                    if (naturalW < 200 && renderedW < 100) return;
                     // "메인배너_컬리N마트_실제제목" → "실제제목"
-                    const rawAlt = img.alt || '';
+                    const rawAlt = img.alt || a.getAttribute('aria-label') || '';
                     const title = rawAlt
                         .replace(/^메인배너[_\s]*(컬리N마트|컬리)[_\s]*/i, '')
                         .replace(/^메인배너[_\s]*/i, '')
