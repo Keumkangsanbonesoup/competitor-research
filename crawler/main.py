@@ -19,12 +19,11 @@ from playwright_stealth import stealth_sync
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from sites.coupang import CoupangCrawler
 from sites.kurly import KurlyCrawler
 from sites.naver_kurly import NaverKurlyCrawler
 from sites.ssg import SSGCrawler
 
-CRAWLERS = [CoupangCrawler, KurlyCrawler, SSGCrawler, NaverKurlyCrawler]
+CRAWLERS = [KurlyCrawler, SSGCrawler, NaverKurlyCrawler]  # 쿠팡: Akamai 차단으로 제외
 
 
 def main():
