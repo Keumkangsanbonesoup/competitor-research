@@ -36,12 +36,12 @@ PROMPT_BATCH = """너는 B마트마케팅팀의 경쟁사 프로모션 브리핑
 - benefit: 한 문장, 최대 50자(핵심 혜택 한 줄).
 - coupons: **행사 전체 공통 혜택만**(신규가입·멤버십·카드 청구할인·무료배송·행사 대표 할인율). 하단 상품 썸네일의 **개별 상품 쿠폰(15%/10%/3천원 등) 제외.** 최대 3개. tag=핵심 숫자/혜택, desc=짧은 조건(≤15자). 불명확하면 [].
 - category: 대표 카테고리 3~5개 쉼표, 최대 40자, 문장 금지.
-- feat: 한 문장, 최대 50자(차별점/형식만).
-- util: B마트 시사점 한 문장, 최대 60자.
+- feat: 프로모션 특징을 **2~3개 짧은 불릿 배열**로(각 ≤22자, 핵심 키워드 위주). 예: ["주간 전단 연계","1+1 증정 다수","제철 신선 집중"].
+- util: B마트 활용방안을 **구체적으로 2문장**(각 한 줄, 합쳐 최대 120자). 'B마트는 ~하고, ~한다' 식의 실행 시사점.
 - 추측 금지(없으면 "정보 없음"). text가 사이트 헤더/검색어 같은 잡음뿐이면 title을 근거로 label·benefit만 채우고 나머지는 "정보 없음"/[]. 잡음 베끼지 마.
 
 [출력] 입력과 동일한 개수·순서의 JSON만:
-{{"results":[{{"label":"...","benefit":"...","coupons":[{{"tag":"...","desc":"..."}}],"category":"...","feat":"...","util":"..."}}]}}
+{{"results":[{{"label":"...","benefit":"...","coupons":[{{"tag":"...","desc":"..."}}],"category":"...","feat":["...","..."],"util":"..."}}]}}
 
 [입력]
 {items}
@@ -196,13 +196,31 @@ def render(weekkey, weeklabel, date, sites, weeks):
             media = ""
             if p.get("banner"): media += fig("진입 배너", p.get("banner"), p.get("banner"))
             if p.get("thumb"):  media += fig("기획전 첫 화면", p.get("thumb"), p.get("full"), with_btn=True)
-            chips = "".join(f'<span class="chip"><b>{esc(c.get("tag",""))}</b><i>{esc(c.get("desc",""))}</i></span>' for c in p.get("coupons", []))
-            coupon_row = f'<div class="row hl-c"><h4>쿠폰 스킴</h4><div class="chips">{chips}</div></div>' if chips else ""
+            # 베네핏 칩 (desc 비거나 '정보 없음'이면 생략)
+            chip_html = ""
+            for c in p.get("coupons", []):
+                tag = esc(c.get("tag", "")); desc = (c.get("desc") or "").strip()
+                if desc in ("정보 없음", "-"): desc = ""
+                chip_html += f'<span class="chip"><b>{tag}</b>' + (f'<i>{esc(desc)}</i>' if desc else '') + '</span>'
             def row(lbl, val, cls=""):
                 return f'<div class="row {cls}"><h4>{lbl}</h4><p>{esc(val)}</p></div>' if val else ""
-            info = (row("메인 베네핏", p.get("benefit"), "hl-b") + coupon_row
+            # 메인 베네핏 = 한 줄 요약 + 베네핏 칩(통합)
+            benefit_block = '<div class="row hl-b"><h4>메인 베네핏</h4>'
+            if p.get("benefit"): benefit_block += f'<p>{esc(p.get("benefit"))}</p>'
+            if chip_html: benefit_block += f'<div class="chips">{chip_html}</div>'
+            benefit_block += '</div>'
+            # 프로모션 특징 = 불릿(리스트면 ul, 문자열이면 p)
+            feat = p.get("feat")
+            if isinstance(feat, list) and feat:
+                feat_html = '<ul class="featul">' + "".join(f'<li>{esc(x)}</li>' for x in feat if x) + '</ul>'
+            elif isinstance(feat, str) and feat.strip():
+                feat_html = f'<p>{esc(feat)}</p>'
+            else:
+                feat_html = ""
+            feat_row = f'<div class="row"><h4>프로모션 특징</h4>{feat_html}</div>' if feat_html else ""
+            info = (benefit_block
                     + row("대표 상품·카테고리", p.get("category"))
-                    + row("프로모션 특징", p.get("feat"))
+                    + feat_row
                     + row("B마트 활용방안", p.get("util"), "hl-u"))
             open_btn = f'<a class="open" href="{esc(p.get("url","#"))}" target="_blank" rel="noopener">프로모션 페이지 열기 ↗</a>'
             cards += (f'<article class="pc"><div class="pc-head"><span class="ix">PROMO {idx+1:02d}</span><h3>{esc(p.get("label"))}</h3></div>'
