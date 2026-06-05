@@ -20,6 +20,24 @@ class NaverKurlyCrawler(BaseCrawler):
         except Exception:
             pass
         page.wait_for_timeout(5000)
+
+        # ── 진단 로그 (수집 실패 원인 파악용) ──
+        print(f"    [진단] 최종 URL: {page.url}")
+        print(f"    [진단] 페이지 제목: {page.title()}")
+        diag = page.evaluate("""
+            () => {
+                const allLinks = document.querySelectorAll('a[href]').length;
+                const promoLinks = Array.from(document.querySelectorAll('a[href]'))
+                    .filter(a => a.href.includes('kurlynmart/bundle') || a.href.includes('kurlynmart/festa') || a.href.includes('shopping.naver.com/festa'))
+                    .map(a => a.href).slice(0, 5);
+                const imgCount = document.querySelectorAll('img').length;
+                return { allLinks, promoLinks, imgCount };
+            }
+        """)
+        print(f"    [진단] 전체 a태그: {diag['allLinks']}개 / img태그: {diag['imgCount']}개")
+        print(f"    [진단] 프로모 패턴 링크: {diag['promoLinks']}")
+        # ── 진단 끝 ──
+
         # 배너 캐러셀 lazy 로드: 더 촘촘히 스크롤 + 대기 (프로모션 1개만 잡히는 문제 완화)
         for pct in [0.2, 0.4, 0.6, 0.8, 0.4, 0.0]:
             page.evaluate(f"window.scrollTo(0, document.body.scrollHeight * {pct})")
