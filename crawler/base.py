@@ -28,7 +28,12 @@ class BaseCrawler(ABC):
         """개별 프로모션 페이지 진입 → 스크린샷·텍스트·이미지 수집."""
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2500)
+            # JS 콘텐츠 렌더 대기(오픈런 등 동적 페이지가 '구름'만 뜬 채 긁히는 것 방지)
+            try:
+                page.wait_for_load_state("networkidle", timeout=12000)
+            except Exception:
+                pass
+            page.wait_for_timeout(4000)
 
             # ① KV(첫 화면)는 반드시 '최상단'에서 촬영 (스크롤 전)
             #    - 이전 버그: 페이지 중간으로 스크롤한 뒤 찍어 SSG 등 긴 페이지의
