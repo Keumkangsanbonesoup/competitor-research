@@ -1,35 +1,27 @@
+# Songbird 자동 배포 설정
+# 폴더 안의 모든 정적 파일(HTML, CSS, JS, 이미지 등)을 그대로 진열장에 올려요.
+# 새 파일을 추가해도 YAML은 더 안 고쳐도 돼요.
+
+include:
+  - component: $CI_SERVER_FQDN/alattalatta/songbird/deploy@1.1.0
+    inputs:
+      needs:
+        - build
+      outputdir: dist
+      stage: deploy
+
 stages:
-  - crawl
+  - build
+  - deploy
 
-weekly-competitor-crawl:
-  stage: crawl
-  image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+build:
+  image: alpine
+  stage: build
   script:
-    - pip install -r requirements.txt
-    # Scrapling용 브라우저(Camoufox) 설치 — 실패해도 job 죽지 않게 가드(쿠팡만 스킵, 3사는 정상)
-    - scrapling install || python -m camoufox fetch || echo "camoufox 설치 실패 → 쿠팡 스킵"
-    - python crawler/main.py
-
-    # === 결과 JSON 커밋 ===
-    # shell에서 base64를 인수로 넘기면 ARG_MAX 초과 → Python 스크립트로 처리
-    - TODAY=$(date +%Y-%m-%d)
-
-    # 1) 'data' 브랜치 없으면 생성 (이미 있으면 400 → 무시)
-    - |
-      curl --silent --output /dev/null \
-        --request POST \
-        --header "PRIVATE-TOKEN: ${CI_PUSH_TOKEN}" \
-        "${CI_SERVER_URL}/api/v4/projects/${CI_PROJECT_ID}/repository/branches?branch=data&ref=main"
-
-    # 2) Python 스크립트로 커밋 (대용량 파일도 안전)
-    - python crawler/commit_result.py "data/${TODAY}.json"
-
+    - mkdir -p dist
+    # 루트 폴더에 있는 거 전부 dist로 옮김 (단, dist 자신, .git, .gitlab-ci.yml은 제외)
+    - find . -mindepth 1 -maxdepth 1 ! -name dist ! -name '.git' ! -name '.gitlab-ci.yml' -exec cp -r {} dist/ \;
   artifacts:
-    name: "competitor-data-$CI_PIPELINE_CREATED_AT"
     paths:
-      - data/
-    expire_in: 8 weeks
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "schedule"
-    - if: $CI_PIPELINE_SOURCE == "web"
-      when: manual
+      - dist
+    expire_in: 5 mins
