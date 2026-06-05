@@ -7,23 +7,36 @@ on:
 
 jobs:
 
-  # ① 크롤링 (Playwright 컨테이너 필요 — git 작업 없음)
+  # ① 크롤링
   crawl:
     runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - run: pip install -r requirements.txt
+      - run: python -m playwright install chromium --with-deps
       - run: python crawler/main.py
+      - name: 수집 JSON 커밋
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/*.json
+          git diff --cached --quiet || git commit -m "data: $(date -u +%Y-%m-%d) 경쟁사 수집"
+          git push
       - uses: actions/upload-artifact@v4
         with:
           name: data
           path: data/
           retention-days: 1
 
-  # ② 수집 데이터 git 커밋 (컨테이너 없음 — git 작업 안전)
-  commit_data:
+  # ② 리포트 생성
+  generate_report:
     needs: crawl
     runs-on: ubuntu-latest
     permissions:
@@ -32,32 +45,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: data
-          path: data/
-      - name: 수집 JSON 커밋
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/*.json
-          git diff --cached --quiet || git commit -m "data: $(date -u +%Y-%m-%d) 경쟁사 수집"
-          git push
-
-  # ③ 리포트 생성 (Playwright 컨테이너 필요 — git 작업 없음)
-  generate_report:
-    needs: commit_data
-    runs-on: ubuntu-latest
-    container:
-      image: mcr.microsoft.com/playwright/python:v1.44.0-jammy
-    steps:
-      - uses: actions/checkout@v4
-        with:
           ref: main
       - uses: actions/download-artifact@v4
         with:
           name: data
           path: data/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - run: pip install -r requirements.txt
       - name: 이전 주차 파일 복원
         run: |
@@ -71,27 +66,6 @@ jobs:
       - run: python crawler/build_report.py
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: deploy
-          path: _deploy/
-          retention-days: 1
-
-  # ④ 리포트 아카이브 git 커밋 (컨테이너 없음 — git 작업 안전)
-  commit_archive:
-    needs: generate_report
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          ref: main
-      - uses: actions/download-artifact@v4
-        with:
-          name: deploy
-          path: _deploy/
       - name: 이번 주차 아카이브 커밋
         run: |
           git config user.name "github-actions[bot]"
@@ -105,10 +79,15 @@ jobs:
           git add pages_archive/
           git diff --cached --quiet || git commit -m "archive: 주차별 리포트 누적 저장"
           git push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deploy
+          path: _deploy/
+          retention-days: 1
 
-  # ⑤ GitHub Pages 빌드
+  # ③ GitHub Pages 빌드
   build:
-    needs: commit_archive
+    needs: generate_report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -119,7 +98,7 @@ jobs:
         with:
           path: _deploy/
 
-  # ⑥ GitHub Pages 배포
+  # ④ GitHub Pages 배포
   deploy:
     needs: build
     runs-on: ubuntu-latest
